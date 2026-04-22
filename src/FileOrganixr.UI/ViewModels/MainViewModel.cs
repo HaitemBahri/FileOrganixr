@@ -9,6 +9,7 @@ public sealed class MainViewModel : ViewModelBase
 {
     private readonly Dispatcher _dispatcher;
     private readonly IActionRequestStore _requestStore;
+    private readonly IActionRequestUpdater _requestUpdater;
 
     public MainViewModel(
         RequestsViewModel requests,
@@ -18,6 +19,7 @@ public sealed class MainViewModel : ViewModelBase
         SettingsPanelViewModel settingsPanel,
         NotificationBannerViewModel notification,
         IActionRequestStore requestStore,
+        IActionRequestUpdater requestUpdater,
         Dispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(requests);
@@ -27,6 +29,7 @@ public sealed class MainViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(settingsPanel);
         ArgumentNullException.ThrowIfNull(notification);
         ArgumentNullException.ThrowIfNull(requestStore);
+        ArgumentNullException.ThrowIfNull(requestUpdater);
         ArgumentNullException.ThrowIfNull(dispatcher);
 
         Requests = requests;
@@ -36,6 +39,7 @@ public sealed class MainViewModel : ViewModelBase
         SettingsPanel = settingsPanel;
         Notification = notification;
         _requestStore = requestStore;
+        _requestUpdater = requestUpdater;
         _dispatcher = dispatcher;
 
         Requests.SelectedItemChanged += OnSelectedRequestChanged;
@@ -43,6 +47,7 @@ public sealed class MainViewModel : ViewModelBase
         ApprovalActions.ActionMessageRaised += OnApprovalActionMessageRaised;
         SettingsPanel.RefreshFailed += OnSettingsPanelRefreshFailed;
         _requestStore.Added += OnRequestAdded;
+        _requestUpdater.StatusChanged += OnRequestStatusChanged;
 
         LoadInitialRequests();
     }
@@ -77,29 +82,7 @@ public sealed class MainViewModel : ViewModelBase
     {
         DispatchToUi(() =>
         {
-            Requests.Upsert(request);
-
-            if (Requests.SelectedItem is null)
-            {
-                Requests.SelectedItem = Requests.Items.FirstOrDefault();
-            }
-
-            RequestDetails.BindTo(Requests.SelectedItem);
-
-            var added = Requests.FindById(request.Id);
-            if (added is not null)
-            {
-                RuntimeState.RecordRequestEvent(added);
-                if (added.CurrentStatus == ActionRequestStatus.Failed)
-                {
-                    Notification.Show(
-                        $"Request failed: {added.FileName}",
-                        NotificationSeverity.Error,
-                        added.LatestNote);
-                }
-            }
-
-            RuntimeState.UpdateFromRequests(Requests.Items);
+            ApplyRequestUpdate(request, ensureSelectionWhenEmpty: true);
         });
     }
 
@@ -107,23 +90,20 @@ public sealed class MainViewModel : ViewModelBase
     {
         DispatchToUi(() =>
         {
-            Requests.Upsert(updatedRequest);
-            RequestDetails.BindTo(Requests.SelectedItem);
+            ApplyRequestUpdate(updatedRequest, ensureSelectionWhenEmpty: false);
+        });
+    }
 
-            var updated = Requests.FindById(updatedRequest.Id);
-            if (updated is not null)
+    private void OnRequestStatusChanged(object? sender, ActionRequest updatedRequest)
+    {
+        DispatchToUi(() =>
+        {
+            if (!IsPersisted(updatedRequest.Id))
             {
-                RuntimeState.RecordRequestEvent(updated);
-                if (updated.CurrentStatus == ActionRequestStatus.Failed)
-                {
-                    Notification.Show(
-                        $"Request failed: {updated.FileName}",
-                        NotificationSeverity.Error,
-                        updated.LatestNote);
-                }
+                return;
             }
 
-            RuntimeState.UpdateFromRequests(Requests.Items);
+            ApplyRequestUpdate(updatedRequest, ensureSelectionWhenEmpty: false);
         });
     }
 
@@ -141,6 +121,38 @@ public sealed class MainViewModel : ViewModelBase
     private void OnSettingsPanelRefreshFailed(string message)
     {
         DispatchToUi(() => { Notification.Show("Settings refresh failed.", NotificationSeverity.Warning, message); });
+    }
+
+    private void ApplyRequestUpdate(ActionRequest request, bool ensureSelectionWhenEmpty)
+    {
+        Requests.Upsert(request);
+
+        if (ensureSelectionWhenEmpty && Requests.SelectedItem is null)
+        {
+            Requests.SelectedItem = Requests.Items.FirstOrDefault();
+        }
+
+        RequestDetails.BindTo(Requests.SelectedItem);
+
+        var updated = Requests.FindById(request.Id);
+        if (updated is not null)
+        {
+            RuntimeState.RecordRequestEvent(updated);
+            if (updated.CurrentStatus == ActionRequestStatus.Failed)
+            {
+                Notification.Show(
+                    $"Request failed: {updated.FileName}",
+                    NotificationSeverity.Error,
+                    updated.LatestNote);
+            }
+        }
+
+        RuntimeState.UpdateFromRequests(Requests.Items);
+    }
+
+    private bool IsPersisted(Guid requestId)
+    {
+        return _requestStore.GetSnapshot().Any(request => request.Id == requestId);
     }
 
     private void DispatchToUi(Action action)

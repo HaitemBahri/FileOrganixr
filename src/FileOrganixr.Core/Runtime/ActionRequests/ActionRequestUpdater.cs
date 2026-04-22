@@ -39,6 +39,8 @@ public sealed class ActionRequestUpdater : IActionRequestUpdater
             ]
         };
 
+    public event EventHandler<ActionRequest>? StatusChanged;
+
     public void AddStatus(ActionRequest request, ActionRequestStatus status, string note = "")
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -53,6 +55,8 @@ public sealed class ActionRequestUpdater : IActionRequestUpdater
 
             request.AddStatus(status, normalizedNote);
         }
+
+        StatusChanged?.Invoke(this, request);
     }
 
     private static void ValidateTransition(ActionRequest request, ActionRequestStatus nextStatus)
